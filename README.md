@@ -4,11 +4,18 @@
 [![FOSS](https://img.shields.io/badge/FOSS-Free%20%26%20Open%20Source-brightgreen.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![CI/CD](https://img.shields.io/badge/GitHub%20Actions-Build%20%26%20Publish-2088FF?logo=github-actions&logoColor=white)](.github/workflows/build-and-publish.yml)
 [![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B-3DDC84.svg?logo=android&logoColor=white)](https://android.com)
+[![Built with Google AI Studio](https://img.shields.io/badge/Built%20with-Google%20AI%20Studio-4285F4.svg?logo=google&logoColor=white)](https://aistudio.google.com)
 [![Footprint](https://img.shields.io/badge/APK%20Size-9.3%20MB-success)](https://github.com)
 
 **RootPurge** is an ultra-lightweight, blazing-fast root cache cleaner for Android. Built with modern Kotlin and Jetpack Compose, it leverages superuser privileges (`su`) to traverse, calculate, and purge app caches, JIT code caches, and system temp files across all applications in a single click.
 
 Designed with a strict **no-bloat philosophy**: plain, distraction-free, dynamically themed to your device wallpaper, with an APK size under **10 MB** and runtime RAM consumption under **15 MB**. Licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
+
+---
+
+## 🤖 Built with Google AI Studio
+
+This project was built and generated using **Google AI Studio**. The entire architecture—including the single-process root execution engine, the reactive Jetpack Compose UI, the dynamic wallpaper theme, automated Robolectric test suites, and GitHub Actions CI/CD release pipelines—was designed and developed with Google AI Studio.
 
 ---
 
@@ -176,10 +183,18 @@ chmod +x gradlew
 
 A production-ready GitHub Actions workflow is provided at [`.github/workflows/build-and-publish.yml`](.github/workflows/build-and-publish.yml):
 
-- **Automated Verification**: Automatically runs unit & Robolectric tests on every push to `main`.
-- **Manual Trigger (`workflow_dispatch`)**: Go to **Actions** -> **Build & Publish Release** -> **Run workflow** to compile and create a new GitHub Release with the standalone APK attached.
-- **Tag-based Release**: Pushing any tag starting with `v*` (e.g., `git tag v1.0.0 && git push --tags`) automatically compiles the app, generates release notes, and publishes the standalone APK release.
+- **Automatic Releases on Every Push or Manual Run**:
+  - **Pushes to `main`**: Automatically compiles, runs tests, and publishes a new release tagged `v1.0.<run_number>` with `RootPurge.apk` attached.
+  - **Version Tags**: Pushing any tag starting with `v*` (e.g., `git tag v1.0.0 && git push --tags`) publishes a release for that exact tag.
+  - **Manual Trigger (`workflow_dispatch`)**: Go to **Actions** -> **Build & Publish Release** -> **Run workflow** (with optional custom tag) to compile and publish on demand.
+- **Artifacts**: Every build uploads the standalone `RootPurge-APK` as a downloadable artifact.
 - **Zero Configuration Runner**: Automatically restores debug keystore and `.env` files on GitHub virtual environments.
+
+> **Important (GitHub Setting)**: For GitHub Actions to create Releases, ensure your repository has write permissions enabled:
+> 1. Go to your repo **Settings** -> **Actions** -> **General**.
+> 2. Scroll to **Workflow permissions**.
+> 3. Select **"Read and write permissions"** and check **"Allow GitHub Actions to create and approve pull requests"**.
+> 4. Click **Save**.
 
 ---
 

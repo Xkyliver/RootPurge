@@ -10,21 +10,21 @@ on:
     inputs:
       publish_release:
         description: 'Publish as GitHub Release'
-        required: true
+        required: false
         type: boolean
         default: true
       version_tag:
         description: 'Release version tag (e.g., v1.0.0)'
         required: false
         type: string
-        default: 'v1.0.0'
+        default: ''
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build & Test Android App
+    name: Build & Publish Android App
     runs-on: ubuntu-latest
 
     steps:
@@ -88,20 +88,35 @@ jobs:
           path: release-output/RootPurge.apk
           retention-days: 14
 
+      - name: Determine Release Tag
+        id: tag_picker
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          elif [ -n "${{ inputs.version_tag }}" ]; then
+            TAG="${{ inputs.version_tag }}"
+          else
+            TAG="v1.0.${{ github.run_number }}"
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "Selected Release Tag: $TAG"
+
       - name: Create & Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version_tag }}
-          name: RootPurge ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version_tag }}
+          tag_name: ${{ steps.tag_picker.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: RootPurge ${{ steps.tag_picker.outputs.tag }}
           body: |
-            ### ⚡ RootPurge Release
+            ### ⚡ RootPurge Release (${{ steps.tag_picker.outputs.tag }})
             
             Ultra-lightweight, blazing-fast root cache cleaner for Android apps and system storage.
+            Built with **Google AI Studio**.
             
             #### Highlights:
-            - **1-Click Turbo Purge**: Single-session batch root cleaning across `/data/data/*/cache`, `/data/user/0/*/cache`, `code_cache`, `/sdcard/Android/data/*/cache`, and system partitions.
-            - **Ultra-lightweight**: APK file size **< 10 MB** and runtime RAM **< 15 MB**.
+            - **1-Click Turbo Purge**: Single-session batch root cleaning across `/data/user/0/*/cache`, `code_cache`, `/sdcard/Android/data/*/cache`, and system partitions.
+            - **Accurate Storage Calculation**: Real physical size calculation without synthetic estimates.
+            - **Ultra-lightweight**: APK file size **~9.3 MB** and runtime RAM **< 15 MB**.
             - **Wallpaper-Themed Monochrome**: Material You dynamic theming with neutral monochrome fallback.
             - **FOSS**: Free and Open Source under the GNU General Public License v3.0 (GPL-3.0).
             

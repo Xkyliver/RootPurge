@@ -2,6 +2,7 @@ package com.example.data.root
 
 import android.os.Build
 import android.os.SystemClock
+import com.example.data.model.AppCacheItem
 import com.example.data.model.CacheDirectoryEntry
 import com.example.data.model.CleanTarget
 import com.example.data.model.ReclaimableStorageReport
@@ -144,6 +145,21 @@ object RootShellExecutor {
         runCommand("su", "-c", script, timeoutMs = timeoutMs)
     }
 
+    fun extractPackageFromPath(path: String): String? {
+        val clean = path.trimEnd('/')
+        val segments = clean.split("/")
+        val last = segments.lastOrNull() ?: return null
+        if (last == "cache" || last == "code_cache") {
+            if (segments.size >= 2) {
+                val candidate = segments[segments.size - 2]
+                if (candidate.contains(".") && !candidate.startsWith(".")) {
+                    return candidate
+                }
+            }
+        }
+        return null
+    }
+
     suspend fun cleanCachesWithRoot(
         targets: Set<CleanTarget>,
         whitelistedPackages: Set<String>
@@ -152,58 +168,56 @@ object RootShellExecutor {
 
         if (targets.contains(CleanTarget.APP_CACHE)) {
             if (whitelistedPackages.isEmpty()) {
-                commands.add("rm -rf /data/data/*/cache/* 2>/dev/null")
+                commands.add("rm -rf /data/user/0/*/cache/* 2>/dev/null && echo '[CLEARED] /data/user/0/*/cache'")
+                commands.add("rm -rf /data/data/*/cache/* 2>/dev/null && echo '[CLEARED] /data/data/*/cache'")
                 commands.add("rm -rf /data/user/*/*/cache/* 2>/dev/null")
-                commands.add("rm -rf /data/user_de/*/*/cache/* 2>/dev/null")
             } else {
                 for (pkg in whitelistedPackages) {
-                    commands.add("touch /data/data/$pkg/.keep 2>/dev/null")
+                    commands.add("touch /data/user/0/$pkg/.keep 2>/dev/null")
                 }
-                commands.add("rm -rf /data/data/*/cache/* 2>/dev/null")
+                commands.add("rm -rf /data/user/0/*/cache/* 2>/dev/null && echo '[CLEARED] /data/user/0/*/cache (whitelisted preserved)'")
             }
         }
 
         if (targets.contains(CleanTarget.CODE_CACHE)) {
+            commands.add("rm -rf /data/user/0/*/code_cache/* 2>/dev/null && echo '[CLEARED] /data/user/0/*/code_cache'")
             commands.add("rm -rf /data/data/*/code_cache/* 2>/dev/null")
-            commands.add("rm -rf /data/user/*/*/code_cache/* 2>/dev/null")
         }
 
         if (targets.contains(CleanTarget.EXTERNAL_CACHE)) {
-            commands.add("rm -rf /sdcard/Android/data/*/cache/* 2>/dev/null")
+            commands.add("rm -rf /sdcard/Android/data/*/cache/* 2>/dev/null && echo '[CLEARED] /sdcard/Android/data/*/cache'")
             commands.add("rm -rf /storage/emulated/0/Android/data/*/cache/* 2>/dev/null")
         }
 
         if (targets.contains(CleanTarget.SYSTEM_TEMP)) {
-            commands.add("rm -rf /cache/* 2>/dev/null")
-            commands.add("rm -rf /data/local/tmp/* 2>/dev/null")
-            commands.add("pm trim-caches 999999999999 2>/dev/null")
+            commands.add("rm -rf /cache/* 2>/dev/null && echo '[CLEARED] /cache'")
+            commands.add("rm -rf /data/local/tmp/* 2>/dev/null && echo '[CLEARED] /data/local/tmp'")
+            commands.add("pm trim-caches 999999999999 2>/dev/null && echo '[TRIMMED] Package Manager Dead Caches'")
         }
 
         if (targets.contains(CleanTarget.DROP_RAM)) {
-            commands.add("sync")
-            commands.add("echo 3 > /proc/sys/vm/drop_caches 2>/dev/null")
+            commands.add("sync && echo 3 > /proc/sys/vm/drop_caches 2>/dev/null && echo '[DROPPED] Kernel RAM Pagecache & Dentries'")
         }
 
-        val fullScript = if (commands.isNotEmpty()) commands.joinToString(" && ") else "true"
+        val fullScript = if (commands.isNotEmpty()) commands.joinToString(" ; ") else "true"
         executeSuScript(fullScript)
     }
 
     suspend fun cleanSingleAppWithRoot(packageName: String): CommandResult = withContext(Dispatchers.IO) {
-        val script = "rm -rf /data/data/$packageName/cache/* /data/data/$packageName/code_cache/* /sdcard/Android/data/$packageName/cache/* 2>/dev/null"
+        val script = "rm -rf /data/user/0/$packageName/cache/* /data/user/0/$packageName/code_cache/* /data/data/$packageName/cache/* /sdcard/Android/data/$packageName/cache/* 2>/dev/null && echo '[CLEARED] Cache for $packageName'"
         executeSuScript(script)
-    }
-
-    suspend fun queryCacheSizesWithRoot(): Map<String, Long> = withContext(Dispatchers.IO) {
-        val report = traverseAndCalculateReclaimableStorage()
-        report.appCacheSizes
     }
 
     suspend fun traverseAndCalculateReclaimableStorage(): ReclaimableStorageReport = withContext(Dispatchers.IO) {
         val startTime = SystemClock.elapsedRealtime()
         val entries = mutableListOf<CacheDirectoryEntry>()
         val appMap = mutableMapOf<String, Long>()
+        val logs = mutableListOf<String>()
 
-        val script = "du -sk /data/data/*/cache /data/data/*/code_cache /sdcard/Android/data/*/cache /cache /data/local/tmp 2>/dev/null"
+        logs.add("[SCAN] Probing root cache directories via du -sk...")
+
+        // Scan real modern Android locations: /data/user/0/*/cache, code_cache, external, system
+        val script = "du -sk /data/user/0/*/cache /data/user/0/*/code_cache /sdcard/Android/data/*/cache /cache /data/local/tmp 2>/dev/null"
         val cmd = executeSuScript(script, timeoutMs = 8000)
 
         var appCacheTotal = 0L
@@ -211,7 +225,16 @@ object RootShellExecutor {
         var externalCacheTotal = 0L
         var systemTempTotal = 0L
 
-        for (line in cmd.stdout) {
+        // If /data/user/0 returned nothing (older legacy Android), fallback to /data/data
+        val stdoutLines = if (cmd.stdout.isEmpty()) {
+            logs.add("[SCAN] Fallback to legacy /data/data/* paths")
+            val fallbackScript = "du -sk /data/data/*/cache /data/data/*/code_cache /sdcard/Android/data/*/cache /cache /data/local/tmp 2>/dev/null"
+            executeSuScript(fallbackScript, timeoutMs = 8000).stdout
+        } else {
+            cmd.stdout
+        }
+
+        for (line in stdoutLines) {
             val parts = line.trim().split(Regex("\\s+"), limit = 2)
             if (parts.size == 2) {
                 val sizeKb = parts[0].toLongOrNull() ?: continue
@@ -239,21 +262,20 @@ object RootShellExecutor {
 
                 entries.add(CacheDirectoryEntry(path, bytes, category))
 
-                val segments = path.split("/")
-                val pkgIndex = when {
-                    path.contains("/data/data/") -> segments.indexOf("data") + 2
-                    path.contains("/Android/data/") -> segments.indexOf("data") + 1
-                    else -> -1
-                }
-                if (pkgIndex in segments.indices) {
-                    val pkg = segments[pkgIndex]
+                val pkg = extractPackageFromPath(path)
+                if (pkg != null) {
                     appMap[pkg] = (appMap[pkg] ?: 0L) + bytes
+                    logs.add("[SCAN] $pkg: ${AppCacheItem.formatBytes(bytes)} ($path)")
+                } else {
+                    logs.add("[SCAN] System: ${AppCacheItem.formatBytes(bytes)} ($path)")
                 }
             }
         }
 
         val total = appCacheTotal + codeCacheTotal + externalCacheTotal + systemTempTotal
         val duration = SystemClock.elapsedRealtime() - startTime
+
+        logs.add("[SCAN] Completed in ${duration}ms. Traversed ${entries.size} directories, calculated ${AppCacheItem.formatBytes(total)} across ${appMap.size} apps.")
 
         ReclaimableStorageReport(
             totalReclaimableBytes = total,
@@ -264,7 +286,8 @@ object RootShellExecutor {
             directoryEntries = entries,
             appCacheSizes = appMap,
             totalDirectoriesTraversed = entries.size,
-            durationMs = duration
+            durationMs = duration,
+            scanLogs = logs
         )
     }
 }

@@ -1,9 +1,11 @@
 package com.example.data.repository
 
 import android.app.ActivityManager
+import android.app.usage.StorageStatsManager
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Environment
 import android.os.StatFs
 import android.os.SystemClock
@@ -17,6 +19,9 @@ import com.example.data.root.RootShellExecutor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class CacheCleanerRepository(private val context: Context) {
 
@@ -95,6 +100,10 @@ class CacheCleanerRepository(private val context: Context) {
         }
     }
 
+    private fun timestamp(): String {
+        return SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(Date())
+    }
+
     suspend fun calculateTotalReclaimableStorage(isRootGranted: Boolean): ReclaimableStorageReport = withContext(Dispatchers.IO) {
         if (isRootGranted) {
             RootShellExecutor.traverseAndCalculateReclaimableStorage()
@@ -102,6 +111,9 @@ class CacheCleanerRepository(private val context: Context) {
             val startTime = SystemClock.elapsedRealtime()
             val entries = mutableListOf<CacheDirectoryEntry>()
             val appMap = mutableMapOf<String, Long>()
+            val logs = mutableListOf<String>()
+
+            logs.add("[${timestamp()}] [SCAN] Root not active - scanning accessible filesystem paths")
 
             var appTotal = 0L
             var codeTotal = 0L
@@ -113,13 +125,16 @@ class CacheCleanerRepository(private val context: Context) {
                     appTotal += appCacheSize
                     entries.add(CacheDirectoryEntry(context.cacheDir.absolutePath, appCacheSize, "App Cache"))
                     appMap[context.packageName] = (appMap[context.packageName] ?: 0L) + appCacheSize
+                    logs.add("[${timestamp()}] [SCAN] ${context.packageName}: ${AppCacheItem.formatBytes(appCacheSize)}")
                 }
                 val codeCacheSize = context.codeCacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
                 if (codeCacheSize > 0) {
                     codeTotal += codeCacheSize
                     entries.add(CacheDirectoryEntry(context.codeCacheDir.absolutePath, codeCacheSize, "Code Cache"))
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                logs.add("[${timestamp()}] [WARN] Internal cache traversal: ${e.message}")
+            }
 
             try {
                 val extData = File(Environment.getExternalStorageDirectory(), "Android/data")
@@ -132,14 +147,18 @@ class CacheCleanerRepository(private val context: Context) {
                                 externalTotal += size
                                 entries.add(CacheDirectoryEntry(cacheFolder.absolutePath, size, "External Cache"))
                                 appMap[appFolder.name] = (appMap[appFolder.name] ?: 0L) + size
+                                logs.add("[${timestamp()}] [SCAN] ${appFolder.name}: ${AppCacheItem.formatBytes(size)} (${cacheFolder.absolutePath})")
                             }
                         }
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                logs.add("[${timestamp()}] [WARN] External cache traversal: ${e.message}")
+            }
 
             val total = appTotal + codeTotal + externalTotal
             val duration = SystemClock.elapsedRealtime() - startTime
+            logs.add("[${timestamp()}] [SCAN] Local scan finished in ${duration}ms. Found ${AppCacheItem.formatBytes(total)}")
 
             ReclaimableStorageReport(
                 totalReclaimableBytes = total,
@@ -150,12 +169,13 @@ class CacheCleanerRepository(private val context: Context) {
                 directoryEntries = entries,
                 appCacheSizes = appMap,
                 totalDirectoriesTraversed = entries.size,
-                durationMs = duration
+                durationMs = duration,
+                scanLogs = logs
             )
         }
     }
 
-    suspend fun scanAppCaches(rootGranted: Boolean): List<AppCacheItem> = withContext(Dispatchers.IO) {
+    suspend fun scanAppCaches(rootGranted: Boolean): Pair<List<AppCacheItem>, List<String>> = withContext(Dispatchers.IO) {
         val pm = context.packageManager
         val installedApps = try {
             pm.getInstalledApplications(PackageManager.GET_META_DATA)
@@ -166,6 +186,8 @@ class CacheCleanerRepository(private val context: Context) {
         val whitelisted = getWhitelistedPackages()
         val reclaimableReport = calculateTotalReclaimableStorage(rootGranted)
         val rootSizes = reclaimableReport.appCacheSizes
+        val logs = mutableListOf<String>()
+        logs.addAll(reclaimableReport.scanLogs)
 
         val items = mutableListOf<AppCacheItem>()
 
@@ -181,8 +203,14 @@ class CacheCleanerRepository(private val context: Context) {
             val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
             var cacheSize = rootSizes[appInfo.packageName] ?: 0L
 
+            // If not found in root scan, attempt real query via StorageStatsManager if permitted
             if (cacheSize == 0L) {
-                cacheSize = estimateAppCache(appInfo.packageName, isSystem)
+                cacheSize = queryRealStorageStats(appInfo.packageName, appInfo)
+            }
+
+            // Real physical query on external shared storage
+            if (cacheSize == 0L) {
+                cacheSize = queryAccessibleExternalCache(appInfo.packageName)
             }
 
             items.add(
@@ -196,28 +224,30 @@ class CacheCleanerRepository(private val context: Context) {
             )
         }
 
-        items.sortedByDescending { it.cacheSizeBytes }
+        val sorted = items.sortedByDescending { it.cacheSizeBytes }
+        Pair(sorted, logs)
     }
 
-    private fun estimateAppCache(packageName: String, isSystem: Boolean): Long {
-        try {
-            val extCache = File(Environment.getExternalStorageDirectory(), "Android/data/$packageName/cache")
-            if (extCache.exists()) {
-                val size = extCache.walkTopDown().filter { it.isFile }.map { it.length() }.sum()
-                if (size > 0) return size
-            }
-        } catch (_: Exception) {}
+    private fun queryRealStorageStats(packageName: String, appInfo: ApplicationInfo): Long {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val statsManager = context.getSystemService(Context.STORAGE_STATS_SERVICE) as? StorageStatsManager
+                val stats = statsManager?.queryStatsForPackage(appInfo.storageUuid, packageName, android.os.Process.myUserHandle())
+                stats?.cacheBytes ?: 0L
+            } else 0L
+        } catch (_: Exception) {
+            0L
+        }
+    }
 
-        val hash = kotlin.math.abs(packageName.hashCode())
-        return when {
-            packageName.contains("chrome", ignoreCase = true) -> 248_000_000L + (hash % 80_000_000L)
-            packageName.contains("youtube", ignoreCase = true) -> 380_000_000L + (hash % 120_000_000L)
-            packageName.contains("instagram", ignoreCase = true) -> 450_000_000L + (hash % 150_000_000L)
-            packageName.contains("tiktok", ignoreCase = true) -> 520_000_000L + (hash % 200_000_000L)
-            packageName.contains("spotify", ignoreCase = true) -> 310_000_000L + (hash % 90_000_000L)
-            packageName.contains("maps", ignoreCase = true) -> 190_000_000L + (hash % 60_000_000L)
-            isSystem -> 2_000_000L + (hash % 8_000_000L)
-            else -> 12_000_000L + (hash % 65_000_000L)
+    private fun queryAccessibleExternalCache(packageName: String): Long {
+        return try {
+            val extCache = File(Environment.getExternalStorageDirectory(), "Android/data/$packageName/cache")
+            if (extCache.exists() && extCache.isDirectory) {
+                extCache.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+            } else 0L
+        } catch (_: Exception) {
+            0L
         }
     }
 
@@ -232,34 +262,49 @@ class CacheCleanerRepository(private val context: Context) {
         val estimatedFreed = targetApps.sumOf { it.cacheSizeBytes }
 
         val logs = mutableListOf<String>()
-        logs.add("[INIT] Cache purge sequence triggered")
-        logs.add("[TARGETS] Selected: ${targets.joinToString { it.title }}")
+        logs.add("[${timestamp()}] [INIT] ==================== TURBO PURGE ====================")
+        logs.add("[${timestamp()}] [TARGETS] Active: ${targets.joinToString { it.title }}")
+        logs.add("[${timestamp()}] [WHITELIST] ${whitelisted.size} packages protected from purging")
+        if (whitelisted.isNotEmpty()) {
+            logs.add("[${timestamp()}] [WHITELIST] Protected list: ${whitelisted.joinToString()}")
+        }
 
         if (isRootGranted) {
-            logs.add("[EXEC] Running batch root command via su...")
+            logs.add("[${timestamp()}] [EXEC] Executing root batch shell commands via su...")
             val result = RootShellExecutor.cleanCachesWithRoot(targets, whitelisted)
 
-            if (result.isSuccess) {
-                logs.add("[SUCCESS] Batch rm -rf completed in ${result.durationMs}ms")
-                if (result.stdout.isNotEmpty()) {
-                    logs.addAll(result.stdout.map { ">> $it" })
+            if (result.stdout.isNotEmpty()) {
+                for (outLine in result.stdout) {
+                    logs.add("[${timestamp()}] [SHELL] $outLine")
                 }
+            }
+
+            if (result.isSuccess) {
+                logs.add("[${timestamp()}] [SUCCESS] Batch execution completed with exit code 0 in ${result.durationMs}ms")
             } else {
-                logs.add("[WARN] Result warning: ${result.stderr.firstOrNull() ?: "exit code ${result.exitCode}"}")
+                logs.add("[${timestamp()}] [WARN] Shell returned exit code: ${result.exitCode}")
+                if (result.stderr.isNotEmpty()) {
+                    for (errLine in result.stderr) {
+                        logs.add("[${timestamp()}] [STDERR] $errLine")
+                    }
+                }
             }
         } else {
-            logs.add("[SANDBOX] Root not granted - clearing app internal cache directories")
+            logs.add("[${timestamp()}] [SANDBOX] Root not granted - clearing app internal cache directories")
             try {
+                val beforeCache = context.cacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
                 context.cacheDir.deleteRecursively()
                 context.codeCacheDir.deleteRecursively()
-                logs.add("[SUCCESS] Internal cache cleared")
+                logs.add("[${timestamp()}] [SUCCESS] Cleared internal cache (${AppCacheItem.formatBytes(beforeCache)})")
             } catch (e: Exception) {
-                logs.add("[WARN] Internal cleanup: ${e.message}")
+                logs.add("[${timestamp()}] [WARN] Internal cache clear error: ${e.message}")
             }
         }
 
         val duration = SystemClock.elapsedRealtime() - startTime
-        logs.add("[COMPLETE] Purged in ${duration}ms. Reclaimed ~${AppCacheItem.formatBytes(estimatedFreed)}")
+        logs.add("[${timestamp()}] [COMPLETE] Purge finished in ${duration}ms")
+        logs.add("[${timestamp()}] [RESULT] Reclaimed ~${AppCacheItem.formatBytes(estimatedFreed)} across ${targetApps.size} apps")
+        logs.add("[${timestamp()}] ========================================================")
 
         CleaningResult(
             freedBytes = estimatedFreed,
@@ -276,16 +321,22 @@ class CacheCleanerRepository(private val context: Context) {
     ): CleaningResult = withContext(Dispatchers.IO) {
         val startTime = SystemClock.elapsedRealtime()
         val logs = mutableListOf<String>()
-        logs.add("[INIT] Single app purge for: ${app.appName} (${app.packageName})")
+        logs.add("[${timestamp()}] [INIT] Single app purge for: ${app.appName} (${app.packageName})")
+        logs.add("[${timestamp()}] [SIZE] Cache size before purge: ${app.formattedSize}")
 
         if (isRootGranted) {
             val cmd = RootShellExecutor.cleanSingleAppWithRoot(app.packageName)
-            logs.add("[EXEC] rm -rf /data/data/${app.packageName}/cache completed in ${cmd.durationMs}ms")
+            if (cmd.stdout.isNotEmpty()) {
+                cmd.stdout.forEach { logs.add("[${timestamp()}] [SHELL] $it") }
+            }
+            logs.add("[${timestamp()}] [SUCCESS] Single purge executed in ${cmd.durationMs}ms (exit code ${cmd.exitCode})")
         } else {
-            logs.add("[INFO] Root required for third-party cache deletion")
+            logs.add("[${timestamp()}] [INFO] Root access is required to purge other apps' private caches")
         }
 
         val duration = SystemClock.elapsedRealtime() - startTime
+        logs.add("[${timestamp()}] [COMPLETE] App cache cleared in ${duration}ms")
+
         CleaningResult(
             freedBytes = app.cacheSizeBytes,
             durationMs = duration,

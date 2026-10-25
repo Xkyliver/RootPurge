@@ -15,7 +15,8 @@ data class ReclaimableStorageReport(
     val directoryEntries: List<CacheDirectoryEntry>,
     val appCacheSizes: Map<String, Long>,
     val totalDirectoriesTraversed: Int,
-    val durationMs: Long
+    val durationMs: Long,
+    val scanLogs: List<String> = emptyList()
 ) {
     val formattedTotal: String
         get() = AppCacheItem.formatBytes(totalReclaimableBytes)

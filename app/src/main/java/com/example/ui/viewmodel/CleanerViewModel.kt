@@ -102,7 +102,7 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
             val isRootGranted = root is RootState.Granted
 
             val report = repository.calculateTotalReclaimableStorage(isRootGranted)
-            val apps = repository.scanAppCaches(isRootGranted)
+            val (apps, scanLogs) = repository.scanAppCaches(isRootGranted)
             refreshTelemetry()
 
             _uiState.update {
@@ -110,6 +110,7 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
                     rootState = root,
                     allApps = apps,
                     reclaimableReport = report,
+                    terminalLogs = scanLogs,
                     isScanning = false
                 )
             }
@@ -216,6 +217,8 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
 
             refreshTelemetry()
 
+            val combinedLogs = currentState.terminalLogs + result.logOutput
+
             _uiState.update {
                 it.copy(
                     isPurging = false,
@@ -224,7 +227,7 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
                     allApps = cleanedApps,
                     lastResult = result,
                     showResultDialog = true,
-                    terminalLogs = result.logOutput,
+                    terminalLogs = combinedLogs,
                     lifetimeFreedBytes = newLifetime,
                     lastCleanDurationMs = result.durationMs
                 )
@@ -246,13 +249,18 @@ class CleanerViewModel(application: Application) : AndroidViewModel(application)
 
             refreshTelemetry()
 
+            val combinedLogs = _uiState.value.terminalLogs + result.logOutput
             _uiState.update {
                 it.copy(
                     allApps = updatedApps,
                     lastResult = result,
-                    terminalLogs = result.logOutput
+                    terminalLogs = combinedLogs
                 )
             }
         }
+    }
+
+    fun clearLogs() {
+        _uiState.update { it.copy(terminalLogs = emptyList()) }
     }
 }

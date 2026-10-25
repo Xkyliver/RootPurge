@@ -33,21 +33,40 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
           cache: 'gradle'
 
-      - name: Make Gradle Wrapper Executable
-        run: chmod +x gradlew
+      - name: Setup Environment and Keystore
+        run: |
+          # 1. Restore or create .env file for secrets plugin
+          if [ ! -f .env ]; then
+            cp .env.example .env 2>/dev/null || touch .env
+          fi
+
+          # 2. Restore debug.keystore from base64 if present, or generate a fresh debug keystore
+          if [ -f debug.keystore.base64 ] && [ ! -f debug.keystore ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+
+          if [ ! -f debug.keystore ]; then
+            keytool -genkey -v -keystore debug.keystore \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+          fi
+
+          # 3. Make wrapper executable
+          chmod +x gradlew
 
       - name: Run Unit & Robolectric Tests
-        run: ./gradlew testDebugUnitTest --no-daemon
+        run: ./gradlew testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --no-daemon
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Prepare APK for Release
         id: prepare_apk
@@ -58,15 +77,15 @@ jobs:
             APK_PATH=$(find . -name "*.apk" | head -n 1)
           fi
           echo "Found APK at $APK_PATH"
-          cp "$APK_PATH" release-output/RootPurge-universal.apk
+          cp "$APK_PATH" release-output/RootPurge.apk
           ls -lh release-output/
-          echo "apk_path=release-output/RootPurge-universal.apk" >> $GITHUB_OUTPUT
+          echo "apk_path=release-output/RootPurge.apk" >> $GITHUB_OUTPUT
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: RootPurge-APK
-          path: release-output/RootPurge-universal.apk
+          path: release-output/RootPurge.apk
           retention-days: 14
 
       - name: Create & Publish GitHub Release
@@ -81,14 +100,14 @@ jobs:
             Ultra-lightweight, blazing-fast root cache cleaner for Android apps and system storage.
             
             #### Highlights:
-            - **1-Click Turbo Purge**: Single-session batch root cleaning across `/data/data/*/cache`, `code_cache`, `/sdcard/Android/data/*/cache`, and system partitions.
+            - **1-Click Turbo Purge**: Single-session batch root cleaning across `/data/data/*/cache`, `/data/user/0/*/cache`, `code_cache`, `/sdcard/Android/data/*/cache`, and system partitions.
             - **Ultra-lightweight**: APK file size **< 10 MB** and runtime RAM **< 15 MB**.
             - **Wallpaper-Themed Monochrome**: Material You dynamic theming with neutral monochrome fallback.
             - **FOSS**: Free and Open Source under the GNU General Public License v3.0 (GPL-3.0).
             
-            #### Checksums & Files:
-            - Attachments below contain the standalone APK.
-          files: release-output/RootPurge-universal.apk
+            #### Download:
+            - Standalone APK attached below (`RootPurge.apk`).
+          files: release-output/RootPurge.apk
           generate_release_notes: true
           draft: false
           prerelease: false

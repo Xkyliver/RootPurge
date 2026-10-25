@@ -153,7 +153,8 @@ fun CleanerHomeScreen(
                 item(key = "terminal_logs") {
                     TerminalLogDrawer(
                         logs = state.terminalLogs,
-                        onClose = { viewModel.toggleTerminalDrawer() }
+                        onClose = { viewModel.toggleTerminalDrawer() },
+                        onClearLogs = { viewModel.clearLogs() }
                     )
                 }
             }

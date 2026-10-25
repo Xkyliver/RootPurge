@@ -17,6 +17,10 @@ Designed with a strict **no-bloat philosophy**: plain, distraction-free, dynamic
 
 This project was built and generated using **Google AI Studio**. The entire architecture—including the single-process root execution engine, the reactive Jetpack Compose UI, the dynamic wallpaper theme, automated Robolectric test suites, and GitHub Actions CI/CD release pipelines—was designed and developed with Google AI Studio.
 
+## Why?
+
+I wanted an app that could clean caches with the tap of a button and heard you could now build apps using AI Studio, leading to this
+
 ---
 
 ```

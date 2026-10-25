@@ -1,0 +1,7 @@
+{
+  "name": "RootPurge",
+  "description": "Ultra-fast root cache cleaner for Android apps and system storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

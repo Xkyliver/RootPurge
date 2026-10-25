@@ -1,8 +1,12 @@
 # RootPurge ⚡
 
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![FOSS](https://img.shields.io/badge/FOSS-Free%20%26%20Open%20Source-brightgreen.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![CI/CD](https://img.shields.io/badge/GitHub%20Actions-Build%20%26%20Publish-2088FF?logo=github-actions&logoColor=white)](.github/workflows/build-and-publish.yml)
+
 **RootPurge** is an ultra-lightweight, blazing-fast root cache cleaner for Android. Built with modern Kotlin and Jetpack Compose, it leverages superuser privileges (`su`) to traverse, calculate, and purge app caches, JIT code caches, and system temp files across all applications in a single click.
 
-Designed with a strict **no-bloat philosophy**: plain, distraction-free, dynamically themed to your device wallpaper, with an APK size under **10 MB** and runtime RAM consumption under **15 MB**.
+Designed with a strict **no-bloat philosophy**: plain, distraction-free, dynamically themed to your device wallpaper, with an APK size under **10 MB** and runtime RAM consumption under **15 MB**. Licensed under the **GNU General Public License v3.0 (GPL-3.0)**.
 
 ---
 
@@ -112,6 +116,16 @@ gradle :app:assembleDebug
 
 ---
 
+## 🤖 Continuous Integration & Publishing
+
+A fully configured GitHub Actions workflow is included at [`.github/workflows/build-and-publish.yml`](.github/workflows/build-and-publish.yml):
+
+- **Automated Verification**: Automatically runs unit & Robolectric tests on every push to `main`.
+- **Manual Trigger (`workflow_dispatch`)**: Go to **Actions** -> **Build & Publish Release** -> **Run workflow** to compile and create a new GitHub Release with the APK attached.
+- **Tag-based Release**: Pushing any tag starting with `v*` (e.g., `git tag v1.0.0 && git push --tags`) automatically compiles the app, generates release notes, and publishes the standalone APK release.
+
+---
+
 ## 🔑 Permissions
 
 - `android.permission.QUERY_ALL_PACKAGES`: Required to query installed application packages and calculate per-app cache sizes.
@@ -128,4 +142,4 @@ RootPurge cleans temporary cache directories (`cache` and `code_cache`). It **ne
 
 ## 📄 License
 
-This project is licensed under the MIT License.
+This project is Free and Open Source Software (FOSS) licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See the [LICENSE](LICENSE) file for the full license text.

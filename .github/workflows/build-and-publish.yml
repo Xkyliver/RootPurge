@@ -1,0 +1,96 @@
+name: Build & Publish Release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: 'Publish as GitHub Release'
+        required: true
+        type: boolean
+        default: true
+      version_tag:
+        description: 'Release version tag (e.g., v1.0.0)'
+        required: false
+        type: string
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build & Test Android App
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: 'gradle'
+
+      - name: Make Gradle Wrapper Executable
+        run: chmod +x gradlew
+
+      - name: Run Unit & Robolectric Tests
+        run: ./gradlew testDebugUnitTest --no-daemon
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --no-daemon
+
+      - name: Prepare APK for Release
+        id: prepare_apk
+        run: |
+          mkdir -p release-output
+          APK_PATH=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            APK_PATH=$(find . -name "*.apk" | head -n 1)
+          fi
+          echo "Found APK at $APK_PATH"
+          cp "$APK_PATH" release-output/RootPurge-universal.apk
+          ls -lh release-output/
+          echo "apk_path=release-output/RootPurge-universal.apk" >> $GITHUB_OUTPUT
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: RootPurge-APK
+          path: release-output/RootPurge-universal.apk
+          retention-days: 14
+
+      - name: Create & Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.publish_release == true)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version_tag }}
+          name: RootPurge ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.version_tag }}
+          body: |
+            ### ⚡ RootPurge Release
+            
+            Ultra-lightweight, blazing-fast root cache cleaner for Android apps and system storage.
+            
+            #### Highlights:
+            - **1-Click Turbo Purge**: Single-session batch root cleaning across `/data/data/*/cache`, `code_cache`, `/sdcard/Android/data/*/cache`, and system partitions.
+            - **Ultra-lightweight**: APK file size **< 10 MB** and runtime RAM **< 15 MB**.
+            - **Wallpaper-Themed Monochrome**: Material You dynamic theming with neutral monochrome fallback.
+            - **FOSS**: Free and Open Source under the GNU General Public License v3.0 (GPL-3.0).
+            
+            #### Checksums & Files:
+            - Attachments below contain the standalone APK.
+          files: release-output/RootPurge-universal.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
